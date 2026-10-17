@@ -1,0 +1,69 @@
+You are an expert Pi Network full-stack developer. Make both changes to this codebase now - write the actual files, do not produce a guide or explanation.
+
+1. Add the Pi app configuration file.
+
+Create a file named pi-app-validation.txt containing exactly this single line and nothing else:
+
+piappstudio-rsY22mBHLILWl2IJ8b8qk8YCZrbLTjIt
+
+- Once deployed it must be reachable at exactly this URL: https://world-benefit.netlify.app/pi-app-validation.txt
+- Put it wherever this project serves static assets from - for example public/, static/, dist/, or the equivalent for this framework. Do not put it in a source folder that gets compiled or bundled.
+- It must be served as a static file, excluded from any catch-all route. Do NOT add a route, handler, or redirect for it, and do NOT generate it with JavaScript at runtime - it has to be in the served response body.
+- The file must contain only the token above. No quotes, no JSON, no HTML, no extra whitespace or comments.
+
+2. Implement Pi Network user authentication. Reference: https://pi-apps.github.io/pi-sdk-docs/quick-start/genai/Authentication.
+
+STEP 1 - Sign the user in, in the browser.
+- Load the Pi SDK first: add <script src="https://sdk.minepi.com/pi-sdk.js"></script> to the document head (app/layout.tsx in Next.js, index.html in a plain frontend). window.Pi does not exist until it loads, so every step below fails silently without it.
+- Await Pi.init({ version: "2.0" }) fully before calling Pi.authenticate(...). Do not pass "sandbox" - it is detected automatically now.
+- Call Pi.authenticate(["username"], onIncompletePaymentFound) on load, or alternatively on sign-in button press.
+- Keep the accessToken. Ignore the uid and username beside it.
+
+STEP 2 - Exchange that accessToken with App Studio. Every app must do this, without exception.
+
+    POST https://backend.appstudio-u7cm9zhmha0ruwv8.piappengine.com/pi/auth/v1/login
+    Content-Type: application/json
+    { "accessToken": "<the accessToken from Pi.authenticate>" }
+
+    200 -> { "sessionToken": "<token>", "user": { "uid": "<pi user id>", "username": "<pi username>" } }
+
+App Studio checks the token against the Pi Platform before answering, so the uid and username it returns are the only identity your app may trust. No Pi Network API key is needed.
+
+STEP 3 - Call STEP 2 from whatever part of your app decides what a user is allowed to do.
+- Any server-side code at all (an API route, a serverless or edge function, an Express/Rails/Django server)? Call it there, then issue your own session from the result.
+- A static frontend with no server-side code? Call it straight from the browser and keep the sessionToken in memory. It works exactly the same either way, so having no backend is NOT a reason to skip STEP 2.
+- Never both. One exchange per sign-in.
+
+BROWSER CSP FOR EVERY APP USING THE PI SDK:
+- Set connect-src to include 'self' and https://socialchain.app. The Pi SDK calls https://socialchain.app/v2/me internally during authentication even though application code must never call /v2/me itself.
+- If a static frontend exchanges the Pi access token with App Studio directly from the browser, also allow https://backend.appstudio-u7cm9zhmha0ruwv8.piappengine.com. If Rails or another server exchanges the token server-side, do not add the App Studio backend origin to browser CSP.
+- Never use default-src * or connect-src *. Keep the source list explicit.
+
+FOR RAILS APPS - PiNet embeds the app in a cross-origin iframe:
+- Generate CSP nonces with `config.content_security_policy_nonce_generator = ->(request) { request.request_id }`. Never use request.session.id: the session can be absent before cross-site authentication and produce an empty nonce.
+- Configure the Rails policy with `policy.script_src :self, "https://sdk.minepi.com"`, `policy.style_src :self, :unsafe_inline`, `policy.connect_src :self, "https://socialchain.app"`, and `policy.frame_ancestors :self, "https://*.pinet.com", "https://*.minepi.com"`.
+- Keep script-src nonce-protected with `content_security_policy_nonce_directives = %w[script-src]`, and attach the generated nonce to every inline script. Never add 'unsafe-inline' to script-src.
+- The explicit style-src permits Pi SDK inline styles; the explicit connect-src permits the SDK's internal authentication request without allowing wildcard connections.
+- Never use a wildcard frame ancestor.
+- Remove Rails' X-Frame-Options header; its SAMEORIGIN default blocks PiNet.
+- Configure the embedded Rails session cookie with SameSite=None, Secure, and HttpOnly. Test in the real PiNet iframe because browser third-party-cookie restrictions may still apply.
+- Exempt only the Pi login and logout actions from Rails forgery protection. Never disable CSRF globally. The cross-site iframe may not have the pre-auth Rails session cookie, so checking a CSRF token on these accessToken-authenticated actions can return InvalidAuthenticityToken/HTTP 422.
+- Treat the Pi accessToken as the login endpoint credential. Validate it through App Studio as described above; ignore browser-supplied uid and username.
+- Reset or establish the Rails session only after App Studio successfully validates the accessToken, and store only the uid and username returned by App Studio.
+
+VERIFY RAILS INTEGRATION:
+- Confirm the deployed source URL does not return X-Frame-Options.
+- Confirm Content-Security-Policy contains the restricted Pi frame-ancestors above and no wildcard.
+- Confirm Set-Cookie includes Secure, HttpOnly, and SameSite=None.
+- Exercise the Pi Auth POST from the embedded PiNet app and confirm it does not return InvalidAuthenticityToken/HTTP 422.
+- Add tests proving browser-supplied uid and username are ignored and only the App Studio response identity is stored.
+
+NEVER:
+- Never let the uid or username from Pi.authenticate(...) decide what a user may see, change or receive - they came from the browser, which the end user controls.
+- Never accept a uid or username from a request body, query string or header as the caller's identity.
+- Never call the Pi Platform's /v2/me yourself to authenticate a user - use STEP 2, so user records and app verification keep working. The Pi SDK calls https://socialchain.app/v2/me internally, which is why its origin must still be allowed by connect-src.
+
+Use these exact values:
+- Pi SDK <script> src: https://sdk.minepi.com/pi-sdk.js
+
+Then redeploy the app to the same URL so both changes go live.
